@@ -84,5 +84,5 @@ def search_person():
         return jsonify('Person not found!'), 402
 
 
-if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=6000)
+def start_api_service():
+    app.run(debug=True, host='0.0.0.0', port=4000)

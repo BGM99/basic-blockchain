@@ -1,38 +1,34 @@
 import threading
 import pickle
 import rpyc
+import asyncio
+
 from rpyc import ThreadedServer
-from dataclasses import dataclass
 from blockchain import Blockchain
+from kademlia.network import Server
 
 rpyc.core.protocol.DEFAULT_CONFIG['allow_pickle'] = True
 rpyc.core.protocol.DEFAULT_CONFIG['allow_public_attrs'] = True
 
+RPC_PORT = 5000 # Port for blockchain rpc
+DHT_PORT = 5500 # Port for distributed hash table used to find nodes
 
-@dataclass
-class Host:
-    host_name: str
-    port: int
+MAX_PEERS = 5 # Peers the Node is connected to
+MIN_PEERS = 3
 
 
 class NodeService(rpyc.Service):
     def __init__(self, node):
         self.node = node
-        self.known_peers = set()
 
     def on_connect(self, conn):
-        print("Connected to", conn)
+        # limit number of threads
+        if self.node.index == 0:
+            self.node.index = None
+        self.node.logger.info("RPYC Server connected to a client")
 
     def on_disconnect(self, conn):
-        print("Disconnected from", conn)
-
-    def exposed_register_peer(self, host, port):
-        self.known_peers.add((host, port))
-        self.node.connect_to_peer(host, port)
-        return True
-
-    def exposed_get_known_peers(self):
-        return list(self.known_peers)
+        self.node.logger.info("RPYC Server disconnected from a client")
 
     def exposed_get_blockchain(self):
         with open('chain.pkl', 'rb') as file:
@@ -52,44 +48,109 @@ class NodeService(rpyc.Service):
 
 
 class Node:
-    def __init__(self, local_peer, initial_peer=None):
-        self.host = local_peer.host_name
-        self.port = local_peer.port
-        self.peers = []
-        self.server = ThreadedServer(NodeService(self), port=self.port,
+    def __init__(self, logger, local_peer, initial_peer=None):
+        self.logger = logger
+        self.host = local_peer
+        self.index = 0
+        self.peers = dict() # Key: Host IP, Value: Connection Object
+        self.server = ThreadedServer(NodeService(self), port=RPC_PORT,
                                      protocol_config=rpyc.core.protocol.DEFAULT_CONFIG)
         self.server_thread = threading.Thread(target=self.server.start)
         self.server_thread.daemon = True
         self.server_thread.start()
+        self.dht_server = Server()
+        self.maintain_peers_running = False
+        self.start_maintain_peers(initial_peer)
+
+    async def join_network(self):
+        current = await self.get_current_node_index()
+        self.logger.info(f'Joining network on index {current}')
+        for i in range(current):
+            new_node = await self.dht_server.get('node' + str(current - i))
+            self.connect_to_peer(new_node)
+            if len(self.peers) >= MAX_PEERS:
+                break
+        if (self.index is None or # register as (1,2,3,4,...) host
+                self.index == 0 and current != 0 or # register as init host
+                current - self.index > MAX_PEERS): # Detached index
+            await self.register_network()
+
+    async def register_network(self):
+        current = await self.get_current_node_index() + 1
+        await self.dht_server.set('node' + str(current), self.host)
+        await self.dht_server.set('current', str(current))
+        self.index = current
+        self.logger.info(f'Registered to network on index {current}')
+
+    async def get_current_node_index(self) -> int:
+        try:
+            result = await self.dht_server.get('current')
+            current = int(result)
+            return current
+        except Exception as e:
+            self.logger.error(e)
+            return 0
+
+    def connect_to_peer(self, host) -> bool:
+        if host in self.peers or self.host == host:
+            return False
+        try:
+            conn = rpyc.connect(host, RPC_PORT, config=rpyc.core.protocol.DEFAULT_CONFIG)
+            self.peers[host] = conn
+            self.logger.info(f'Connected to peer {host}:{RPC_PORT}')
+            return True
+        except Exception as e:
+            self.logger.error(e)
+            self.logger.info(f'Failed to connect to peer {host}:{RPC_PORT}')
+            return False
+
+    async def connect_to_bootstrap_node(self, node):
+        await self.dht_server.listen(DHT_PORT)
+        bootstrap_node = (node, DHT_PORT)
+        await self.dht_server.bootstrap([bootstrap_node])
+        self.index = None
+        self.logger.info('Connect to bootstrap node ' + node)
+
+    async def create_bootstrap_node(self):
+        await self.dht_server.listen(DHT_PORT)
+        self.logger.info('Started bootstrap node')
+
+    def start_maintain_peers(self, initial_peer=None):
+        self.maintain_peers_running = True
+        loop = asyncio.get_event_loop()
+        loop.set_debug(True)
+
         if initial_peer is not None:
-            self.join_network(initial_peer)
+            loop.run_until_complete(self.connect_to_bootstrap_node(initial_peer))
+        else:
+            loop.run_until_complete(self.create_bootstrap_node())
+        try:
+            loop.run_until_complete(self.run_maintain_loop())
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.dht_server.stop()
+            loop.close()
 
-    def join_network(self, initial_peer):
-        conn = self.connect_to_peer(initial_peer.host_name, initial_peer.port)
-        known_peers = self.get_known_peers(conn)
-        self.connect_to_peers(known_peers)
-        self.register_all_peers()
+    def stop_maintain_peers(self):
+        self.maintain_peers_running = False
 
-    def connect_to_peer(self, host, port):
-        conn = rpyc.connect(host, port, config=rpyc.core.protocol.DEFAULT_CONFIG)
-        self.peers.append(conn)
-        print(f'Connected to peer {host}:{port}')
-        return conn
+    async def run_maintain_loop(self):
+        while self.maintain_peers_running:
+            await self.update_peers()
+            await asyncio.sleep(30)
 
-    def connect_to_peers(self, peers):
-        for peer in peers:
-            self.connect_to_peer(peer[0], peer[1])
-
-    def get_known_peers(self, conn):
-        return conn.root.get_known_peers()
-
-    def register_all_peers(self):
-        for peer in self.peers:
-            try:
-                peer.root.register_peer(self.host, self.port)
-            except Exception as e:
-                print(e)
-                self.peers.remove(peer)
+    async def update_peers(self):
+        peers = list(self.peers.keys())
+        self.logger.info(f'Current peers ({len(peers)}): {peers}')
+        while len(self.peers) > MAX_PEERS:
+                host, peer = self.peers.popitem()
+                peer.close() # Close last peer
+        if len(self.peers) < MIN_PEERS:
+            # join the network again to get more peers
+            await self.join_network()
+        peers = list(self.peers.keys())
+        self.logger.info(f'Updated peers ({len(peers)}): {peers}')
 
     def get_current_blockchain(self):
         chains = []
@@ -98,7 +159,7 @@ class Node:
                 chains.append(peer.root.get_blockchain())
             except Exception as e:
                 print(e)
-                self.peers.remove(peer)
+                self.remove_peer(peer)
 
         longest_chain = Blockchain(chains[0])
         for c in chains:
@@ -114,4 +175,10 @@ class Node:
                 peer.root.broadcast_block(block)
             except Exception as e:
                 print(e)
-                self.peers.remove(peer)
+                self.remove_peer(peer)
+
+    def remove_peer(self, conn):
+        host = [k for k, v in self.peers.items() if v == conn]
+        for key in host:
+            del self.peers[key]
+            self.logger.warning(f'Removed peer {key}')
