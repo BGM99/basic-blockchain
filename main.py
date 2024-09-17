@@ -17,8 +17,8 @@ import sys
 #wallet = Wallet()
 #wallet.generate_key_pair()
 
-blockchain = Blockchain()
-blockchain.load_from_file()
+#blockchain = Blockchain()
+#blockchain.load_from_file()
 #blockchain.create_genesis_block(wallet.public_key_pem, wallet.private_key_pem)
 #block = Block(date.datetime.now(), ("56c9ac4d6090de", 1), "", wallet.public_key_pem)
 #blockchain.add_block(block, wallet.private_key_pem)
@@ -58,20 +58,11 @@ else:
     node = Node(logger, ip_address)
     logger.warning("Starting network ... ")
 
-service.start_api_service()
 
-logger.warning("Started api service")
-
-# Print the contents of the blockchain
-for block in blockchain.chain:
-    print(f"Block #: {block.index}")
-    print(f"previous_hash: {block.previous_hash}")
-    print(f"timestamp: {block.timestamp}")
-    print(f"data: {block.data}")
-    print(f"person_public_key: {block.person_public_key}")
-    print(f"validator_public_key: {block.validator_public_key}")
-    print(f"signature: {block.signature}")
-    print(f"hash: {block.hash}")
-    print("\n")
-
-time.sleep(9999)  # Check every second
+if len(sys.argv) > 2:
+    service.start_api_service(node)
+    logger.warning("Started api service")
+    logger.warning("Serving as node with backend...")
+else:
+    logger.warning("Serving as normal node...")
+    time.sleep(9999)  # Check every second

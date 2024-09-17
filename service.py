@@ -11,6 +11,8 @@ from blockchain import Blockchain
 app = Flask(__name__)
 CORS(app)
 
+#reference to node object
+blockchain_node = None
 
 @app.route('/generate_wallet', methods=['GET'])
 def generate_wallet():
@@ -84,5 +86,6 @@ def search_person():
         return jsonify('Person not found!'), 402
 
 
-def start_api_service():
+def start_api_service(node):
     app.run(debug=True, host='0.0.0.0', port=4000)
+    blockchain_node = node

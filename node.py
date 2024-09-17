@@ -23,8 +23,6 @@ class NodeService(rpyc.Service):
 
     def on_connect(self, conn):
         # limit number of threads
-        if self.node.index == 0:
-            self.node.index = None
         self.node.logger.info("RPYC Server connected to a client")
 
     def on_disconnect(self, conn):
@@ -39,11 +37,13 @@ class NodeService(rpyc.Service):
         blockchain.load_from_file()
 
         if blockchain.chain is not None:
-            blockchain.chain.append(block)
-            if blockchain.is_valid():
-                blockchain.save_to_file()
-                return
-
+            if blockchain.get_length() < block.index:
+                blockchain.chain.append(block)
+                if blockchain.is_valid():
+                    blockchain.save_to_file()
+                    return
+            else:
+                return # block is already there or behind
         self.node.get_current_blockchain()
 
 
@@ -53,14 +53,17 @@ class Node:
         self.host = local_peer
         self.index = 0
         self.peers = dict() # Key: Host IP, Value: Connection Object
+        #RPYC
         self.server = ThreadedServer(NodeService(self), port=RPC_PORT,
                                      protocol_config=rpyc.core.protocol.DEFAULT_CONFIG)
         self.server_thread = threading.Thread(target=self.server.start)
         self.server_thread.daemon = True
         self.server_thread.start()
+        #DHT
         self.dht_server = Server()
+        self.maintain_peers_thread = threading.Thread(target=self.start_maintain_peers, args=(initial_peer,))
         self.maintain_peers_running = False
-        self.start_maintain_peers(initial_peer)
+        self.maintain_peers_thread.start()
 
     async def join_network(self):
         current = await self.get_current_node_index()
@@ -108,7 +111,7 @@ class Node:
         await self.dht_server.listen(DHT_PORT)
         bootstrap_node = (node, DHT_PORT)
         await self.dht_server.bootstrap([bootstrap_node])
-        self.index = None
+        self.index = None #set to None to register to network later
         self.logger.info('Connect to bootstrap node ' + node)
 
     async def create_bootstrap_node(self):
@@ -158,7 +161,7 @@ class Node:
             try:
                 chains.append(peer.root.get_blockchain())
             except Exception as e:
-                print(e)
+                self.logger.error(e)
                 self.remove_peer(peer)
 
         longest_chain = Blockchain(chains[0])
@@ -174,7 +177,7 @@ class Node:
             try:
                 peer.root.broadcast_block(block)
             except Exception as e:
-                print(e)
+                self.logger.error(e)
                 self.remove_peer(peer)
 
     def remove_peer(self, conn):
