@@ -10,23 +10,29 @@ from kademlia.network import Server
 rpyc.core.protocol.DEFAULT_CONFIG['allow_pickle'] = True
 rpyc.core.protocol.DEFAULT_CONFIG['allow_public_attrs'] = True
 
-RPC_PORT = 5000 # Port for blockchain rpc
-DHT_PORT = 5500 # Port for distributed hash table used to find nodes
+RPC_PORT = 5000  # Port for blockchain rpc
+DHT_PORT = 5500  # Port for distributed hash table used to find nodes
 
-MAX_PEERS = 5 # Peers the Node is connected to
-MIN_PEERS = 3
+MAX_PEERS = 5  # max peer group size
 
 
 class NodeService(rpyc.Service):
     def __init__(self, node):
-        self.node = node
+        self.node = node  # reference to local node object
+        self.peers = []
 
     def on_connect(self, conn):
-        # limit number of threads
-        self.node.logger.info("RPYC Server connected to a client")
+        self.peers.append(conn)
+        # limit the number of connections
+        if len(self.peers) > MAX_PEERS:
+            conn.close()
+            self.node.logger.info("RPYC Server --- closed new connection - current peers: " + str(len(self.peers)))
+        else:
+            self.node.logger.info("RPYC Server --- connected to a client - current peers: " + str(len(self.peers)))
 
     def on_disconnect(self, conn):
-        self.node.logger.info("RPYC Server disconnected from a client")
+        self.peers.remove(conn)
+        self.node.logger.info("RPYC Server --- disconnected from a client - current peers: " + str(len(self.peers)))
 
     def exposed_get_blockchain(self):
         with open('chain.pkl', 'rb') as file:
@@ -43,7 +49,7 @@ class NodeService(rpyc.Service):
                     blockchain.save_to_file()
                     return
             else:
-                return # block is already there or behind
+                return  # block is already there or behind
         self.node.get_current_blockchain()
 
 
@@ -52,14 +58,14 @@ class Node:
         self.logger = logger
         self.host = local_peer
         self.index = 0
-        self.peers = dict() # Key: Host IP, Value: Connection Object
-        #RPYC
+        self.peers = dict()  # Key: Host IP, Value: Connection Object
+        # RPYC
         self.server = ThreadedServer(NodeService(self), port=RPC_PORT,
                                      protocol_config=rpyc.core.protocol.DEFAULT_CONFIG)
         self.server_thread = threading.Thread(target=self.server.start)
         self.server_thread.daemon = True
         self.server_thread.start()
-        #DHT
+        # DHT
         self.dht_server = Server()
         self.maintain_peers_thread = threading.Thread(target=self.start_maintain_peers, args=(initial_peer,))
         self.maintain_peers_running = False
@@ -73,9 +79,9 @@ class Node:
             self.connect_to_peer(new_node)
             if len(self.peers) >= MAX_PEERS:
                 break
-        if (self.index is None or # register as (1,2,3,4,...) host
-                self.index == 0 and current != 0 or # register as init host
-                current - self.index > MAX_PEERS): # Detached index
+        if (self.index is None or  # register as (1,2,3,4,...) host
+                self.index == 0 and current != 0 or  # register as init host
+                current - self.index > MAX_PEERS):  # Detached index
             await self.register_network()
 
     async def register_network(self):
@@ -111,7 +117,7 @@ class Node:
         await self.dht_server.listen(DHT_PORT)
         bootstrap_node = (node, DHT_PORT)
         await self.dht_server.bootstrap([bootstrap_node])
-        self.index = None #set to None to register to network later
+        self.index = None  # set to None to register to network later
         self.logger.info('Connect to bootstrap node ' + node)
 
     async def create_bootstrap_node(self):
@@ -120,7 +126,8 @@ class Node:
 
     def start_maintain_peers(self, initial_peer=None):
         self.maintain_peers_running = True
-        loop = asyncio.get_event_loop()
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
         loop.set_debug(True)
 
         if initial_peer is not None:
@@ -141,28 +148,39 @@ class Node:
     async def run_maintain_loop(self):
         while self.maintain_peers_running:
             await self.update_peers()
-            await asyncio.sleep(30)
+            await asyncio.sleep(15)
+            await self.update_peers()
+            await asyncio.sleep(15)
+            await self.ping_all_peers()  # get rid of broken connections
 
     async def update_peers(self):
         peers = list(self.peers.keys())
         self.logger.info(f'Current peers ({len(peers)}): {peers}')
         while len(self.peers) > MAX_PEERS:
-                host, peer = self.peers.popitem()
-                peer.close() # Close last peer
-        if len(self.peers) < MIN_PEERS:
+            host, peer = self.peers.popitem()
+            peer.close()  # Close last peer
+        if len(self.peers) < MAX_PEERS:
             # join the network again to get more peers
             await self.join_network()
         peers = list(self.peers.keys())
         self.logger.info(f'Updated peers ({len(peers)}): {peers}')
 
+    async def ping_all_peers(self):
+        for peer in self.peers:
+            try:
+                self.peers[peer].ping()
+            except Exception as e:
+                self.logger.error(e)
+                del self.peers[peer]
+
     def get_current_blockchain(self):
         chains = []
         for peer in self.peers:
             try:
-                chains.append(peer.root.get_blockchain())
+                chains.append(self.peers[peer].root.get_blockchain())
             except Exception as e:
                 self.logger.error(e)
-                self.remove_peer(peer)
+                del self.peers[peer]
 
         longest_chain = Blockchain(chains[0])
         for c in chains:
@@ -175,13 +193,7 @@ class Node:
     def broadcast_new_block(self, block):
         for peer in self.peers:
             try:
-                peer.root.broadcast_block(block)
+                self.peers[peer].root.broadcast_block(block)
             except Exception as e:
                 self.logger.error(e)
-                self.remove_peer(peer)
-
-    def remove_peer(self, conn):
-        host = [k for k, v in self.peers.items() if v == conn]
-        for key in host:
-            del self.peers[key]
-            self.logger.warning(f'Removed peer {key}')
+                del self.peers[peer]

@@ -1,8 +1,10 @@
+import threading
 import zipfile
 import datetime as date
 from io import BytesIO
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
+from werkzeug.serving import make_server
 
 from block import Block
 from crypto import Wallet
@@ -11,8 +13,10 @@ from blockchain import Blockchain
 app = Flask(__name__)
 CORS(app)
 
-#reference to node object
-blockchain_node = None
+API_PORT = 4000  # Port for service api
+
+NODE = None  # Reference to node object
+
 
 @app.route('/generate_wallet', methods=['GET'])
 def generate_wallet():
@@ -41,6 +45,7 @@ def get_block_details(block_height):
     block = blockchain.chain[block_height]
     return jsonify(block.to_dict()), 200
 
+
 @app.route('/latest_blocks', methods=['GET'])
 def get_latest_blocks():
     blockchain = Blockchain()
@@ -63,7 +68,8 @@ def create_new_block():
 
     blockchain = Blockchain()
     blockchain.load_from_file()
-    block = Block(date.datetime.now(), (attribs['person_id'], attribs['privilege_level']), streams['person'], streams['public'])
+    block = Block(date.datetime.now(), (attribs['person_id'], attribs['privilege_level']), streams['person'],
+                  streams['public'])
     blockchain.add_block(block, streams['private'])
     blockchain.save_to_file()
 
@@ -86,6 +92,22 @@ def search_person():
         return jsonify('Person not found!'), 402
 
 
+class ServerThread(threading.Thread):
+    def __init__(self):
+        threading.Thread.__init__(self)
+        self.srv = make_server('0.0.0.0', API_PORT, app)
+        self.ctx = app.app_context()
+        self.ctx.push()
+
+    def run(self):
+        self.srv.serve_forever()
+
+    def shutdown(self):
+        self.srv.shutdown()
+
+
 def start_api_service(node):
-    app.run(debug=True, host='0.0.0.0', port=4000)
-    blockchain_node = node
+    server_thread = ServerThread()
+    server_thread.start()
+    NODE = node
+    return server_thread
