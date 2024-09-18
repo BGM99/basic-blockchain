@@ -166,7 +166,8 @@ class Node:
         self.logger.info(f'Updated peers ({len(peers)}): {peers}')
 
     async def ping_all_peers(self):
-        for peer in self.peers:
+        peers = list(self.peers.keys())
+        for peer in peers:
             try:
                 self.peers[peer].ping()
             except Exception as e:
@@ -175,7 +176,8 @@ class Node:
 
     def get_current_blockchain(self):
         chains = []
-        for peer in self.peers:
+        peers = list(self.peers.keys())
+        for peer in peers:
             try:
                 chains.append(self.peers[peer].root.get_blockchain())
             except Exception as e:
@@ -191,7 +193,8 @@ class Node:
         longest_chain.save_to_file()
 
     def broadcast_new_block(self, block):
-        for peer in self.peers:
+        peers = list(self.peers.keys())
+        for peer in peers:
             try:
                 self.peers[peer].root.broadcast_block(block)
             except Exception as e:
