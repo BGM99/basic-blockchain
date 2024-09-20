@@ -1,23 +1,11 @@
-import datetime as date
-import sys
-import time
-
-import service
-
-from node import Node
 import socket
-
 import logging
 import sys
 
-#wallet = Wallet()
-#wallet.generate_key_pair()
+import crypto
+from node import Node
+import service
 
-#blockchain = Blockchain()
-#blockchain.load_from_file()
-#blockchain.create_genesis_block(wallet.public_key_pem, wallet.private_key_pem)
-#block = Block(date.datetime.now(), ("56c9ac4d6090de", 1), "", wallet.public_key_pem)
-#blockchain.add_block(block, wallet.private_key_pem)
 
 logger = logging.getLogger('kademlia')
 logger.setLevel(logging.DEBUG)  # Log Level: DEBUG, INFO, WARNING, ERROR, CRITICAL

@@ -13,7 +13,7 @@ rpyc.core.protocol.DEFAULT_CONFIG['allow_public_attrs'] = True
 RPC_PORT = 5000  # Port for blockchain rpc
 DHT_PORT = 5500  # Port for distributed hash table used to find nodes
 
-MAX_PEERS = 5  # max peer group size
+MAX_PEERS = 5  # max peer group size, the max number of other connected clients
 
 
 class NodeService(rpyc.Service):
@@ -35,18 +35,22 @@ class NodeService(rpyc.Service):
         self.node.logger.info("RPYC Server --- disconnected from a client - current peers: " + str(len(self.peers)))
 
     def exposed_get_blockchain(self):
-        with open('chain.pkl', 'rb') as file:
-            return pickle.load(file)
+        blockchain = Blockchain()
+        blockchain.load_from_file()
+        return blockchain.chain
 
     def exposed_broadcast_block(self, block):
         blockchain = Blockchain()
         blockchain.load_from_file()
-
-        if blockchain.chain is not None:
+        self.node.logger.info(f'A new block has reached this node. Index: {block.index}')
+        if blockchain.chain:
             if blockchain.get_length() < block.index:
                 blockchain.chain.append(block)
                 if blockchain.is_valid():
                     blockchain.save_to_file()
+                    self.node.logger.info("The new block is saved")
+                    # send it to own peers
+                    self.node.broadcast_new_block(block)
                     return
             else:
                 return  # block is already there or behind
@@ -177,6 +181,7 @@ class Node:
     def get_current_blockchain(self):
         chains = []
         peers = list(self.peers.keys())
+        self.logger.info(f'Fetching blockchain from {len(peers)} Node(s)')
         for peer in peers:
             try:
                 chains.append(self.peers[peer].root.get_blockchain())
@@ -190,10 +195,12 @@ class Node:
             if blockchain.get_length() >= longest_chain.get_length() and blockchain.is_valid():
                 longest_chain = blockchain
 
+        self.logger.info(f'The new Blockchain has {longest_chain.get_length()} Block(s)')
         longest_chain.save_to_file()
 
     def broadcast_new_block(self, block):
         peers = list(self.peers.keys())
+        self.logger.info(f'Broadcasting block to {len(peers)} Node(s)')
         for peer in peers:
             try:
                 self.peers[peer].root.broadcast_block(block)

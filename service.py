@@ -2,6 +2,8 @@ import threading
 import zipfile
 import datetime as date
 from io import BytesIO
+from typing import Optional
+
 from flask import Flask, jsonify, request, send_file
 from flask_cors import CORS
 from werkzeug.serving import make_server
@@ -9,13 +11,15 @@ from werkzeug.serving import make_server
 from block import Block
 from crypto import Wallet
 from blockchain import Blockchain
+from node import Node
 
 app = Flask(__name__)
 CORS(app)
 
 API_PORT = 4000  # Port for service api
 
-NODE = None  # Reference to node object
+global node  # Reference to node object
+node: Optional[Node] = None
 
 
 @app.route('/generate_wallet', methods=['GET'])
@@ -50,6 +54,7 @@ def get_block_details(block_height):
 def get_latest_blocks():
     blockchain = Blockchain()
     blockchain.load_from_file()
+    # get the last 6 blocks
     latest_blocks = blockchain.chain[-6:]
     result = []
     for block in latest_blocks:
@@ -71,9 +76,32 @@ def create_new_block():
     block = Block(date.datetime.now(), (attribs['person_id'], attribs['privilege_level']), streams['person'],
                   streams['public'])
     blockchain.add_block(block, streams['private'])
-    blockchain.save_to_file()
 
-    return jsonify(blockchain.get_latest_block().to_dict()), 200
+    if blockchain.is_valid():
+        blockchain.save_to_file()
+        # spread the new block on the network
+        node.broadcast_new_block(block)
+        return jsonify(blockchain.get_latest_block().to_dict()), 200
+    else:
+        return jsonify('The blockchain is not valid with the new block!'), 400
+
+
+@app.route('/create_genesis_block', methods=['POST'])
+def create_genesis_block():
+    files = request.files
+    streams = {}
+
+    for key in files:
+        streams[key] = files[key].read()
+
+    blockchain = Blockchain()
+    blockchain.create_genesis_block(streams['public'], streams['private'])
+
+    if blockchain.is_valid():
+        blockchain.save_to_file()
+        return jsonify(blockchain.get_latest_block().to_dict()), 200
+    else:
+        return jsonify('The blockchain is not valid!'), 400
 
 
 @app.route('/search', methods=['POST'])
@@ -89,7 +117,7 @@ def search_person():
     if block_latest_data is not None:
         return jsonify(block_latest_data.to_dict()), 200
     else:
-        return jsonify('Person not found!'), 402
+        return jsonify('Person not found!'), 404
 
 
 class ServerThread(threading.Thread):
@@ -106,8 +134,9 @@ class ServerThread(threading.Thread):
         self.srv.shutdown()
 
 
-def start_api_service(node):
+def start_api_service(rpc_node):
     server_thread = ServerThread()
     server_thread.start()
-    NODE = node
+    global node
+    node = rpc_node
     return server_thread
