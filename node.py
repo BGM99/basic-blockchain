@@ -61,8 +61,8 @@ class NodeService(rpyc.Service):
 class Node:
     def __init__(self, logger, local_peer, initial_peer=None, has_service=False):
         self.logger = logger
-        self.host = local_peer # Address used for registration in the network
-        self.register_service = has_service # if true this node is registered as api service
+        self.host = local_peer  # Address used for registration in the network
+        self.register_service = has_service  # if true this node is registered as api service
         self.index = 0
         self.peers = dict()  # Key: Host IP, Value: Connection Object
         # RPYC
@@ -76,7 +76,7 @@ class Node:
         self.maintain_peers_thread = threading.Thread(target=self.start_maintain_peers, args=(initial_peer,))
         self.maintain_peers_running = False
         self.maintain_peers_thread.start()
-        self.known_services = set() # set of other nodes that have an api service
+        self.known_services = set()  # set of other nodes that have an api service
 
     async def join_network(self):
         current = await self.get_current_node_index()
@@ -159,7 +159,7 @@ class Node:
             await self.update_peers()
             await asyncio.sleep(15)
             await self.ping_all_peers()  # get rid of broken connections
-            await self.sync_known_services() # sync the known api services
+            await self.sync_known_services()  # sync the known api services
 
     async def update_peers(self):
         peers = list(self.peers.keys())
@@ -217,13 +217,11 @@ class Node:
             result = await self.dht_server.get('current_service')
             if not isinstance(result, str):
                 result = '0'
-            self.logger.info(f'Service current ------- {result}')
             current = int(result)
-            for h in range(current):
+            for h in range(1, current + 1):
                 host = await self.dht_server.get('service' + str(h))
                 self.known_services.add(host)
             if self.register_service:
-                self.logger.info(f'Starting register service')
                 current = current + 1
                 await self.dht_server.set('service' + str(current), self.host)
                 await self.dht_server.set('current_service', str(current))
