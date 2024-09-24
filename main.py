@@ -23,7 +23,7 @@ logger.warning("IP Address: " + ip_address)
 threads = []
 
 if len(sys.argv) > 1:
-    node = Node(logger, ip_address, sys.argv[1])
+    node = Node(logger, ip_address, sys.argv[1], len(sys.argv) > 2)
     logger.warning("Started Node with " + sys.argv[1])
 else:
     node = Node(logger, ip_address)

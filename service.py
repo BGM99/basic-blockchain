@@ -120,6 +120,10 @@ def search_person():
         return jsonify('Person not found!'), 404
 
 
+@app.route('/services', methods=['GET'])
+def get_services():
+    return jsonify(list(node.known_services)), 200
+
 class ServerThread(threading.Thread):
     def __init__(self):
         threading.Thread.__init__(self)
